@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CDI Key/Value Store</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+
+    header {
+      max-width: 860px;
+      margin: 0 auto 1.5rem;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      color: #f8fafc;
+      letter-spacing: -0.02em;
+    }
+
+    #meta {
+      display: flex;
+      align-items: center;
+      gap: 1.2rem;
+      font-size: 0.82rem;
+    }
+
+    #instance-label {
+      color: #94a3b8;
+    }
+
+    #instance-id {
+      color: #38bdf8;
+      font-family: "SF Mono", "Fira Code", monospace;
+    }
+
+    #status {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.78rem;
+      font-weight: 500;
+    }
+
+    #status::before {
+      content: '';
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    #status.connected { color: #4ade80; }
+    #status.connected::before { background: #4ade80; box-shadow: 0 0 4px #4ade80; }
+    #status.disconnected { color: #f87171; }
+    #status.disconnected::before { background: #f87171; }
+    #status.connecting { color: #fbbf24; }
+    #status.connecting::before { background: #fbbf24; }
+
+    .table-wrap {
+      max-width: 860px;
+      margin: 0 auto;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead th {
+      background: #1e293b;
+      padding: 0.65rem 1rem;
+      text-align: left;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #64748b;
+    }
+
+    thead th:last-child { width: 100px; text-align: center; }
+
+    tbody tr {
+      border-top: 1px solid #1e293b;
+    }
+
+    tbody tr:first-child { background: #111827; }
+    tbody tr:not(:first-child):hover { background: #161d2b; }
+
+    td {
+      padding: 0.55rem 1rem;
+      vertical-align: middle;
+    }
+
+    td:last-child { text-align: center; }
+
+    .key-cell {
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 0.85rem;
+      color: #a5b4fc;
+      white-space: nowrap;
+    }
+
+    input[type="text"] {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      color: #e2e8f0;
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 0.85rem;
+      padding: 0.35rem 0.6rem;
+      outline: none;
+      width: 100%;
+      transition: border-color 0.15s;
+    }
+
+    input[type="text"]:focus { border-color: #38bdf8; }
+
+    input[type="text"].flash-saved {
+      border-color: #4ade80;
+      transition: border-color 0s;
+    }
+
+    button {
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 0.32rem 0.75rem;
+      transition: background 0.12s, opacity 0.12s;
+    }
+
+    .btn-add {
+      background: #1d4ed8;
+      color: #fff;
+    }
+    .btn-add:hover { background: #2563eb; }
+    .btn-add:disabled { opacity: 0.4; cursor: default; }
+
+    .btn-delete {
+      background: #1e293b;
+      color: #f87171;
+      border: 1px solid #334155;
+    }
+    .btn-delete:hover { background: #2d1515; border-color: #f87171; }
+
+    #count {
+      max-width: 860px;
+      margin: 0.6rem auto 0;
+      font-size: 0.75rem;
+      color: #475569;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>CDI Key/Value Store</h1>
+  <div id="meta">
+    <span id="instance-label">Instance: <strong id="instance-id">—</strong></span>
+    <span id="status" class="connecting">Connecting</span>
+  </div>
+</header>
+
+<div class="table-wrap">
+  <table id="kv-table">
+    <thead>
+      <tr>
+        <th style="width:35%">Key</th>
+        <th>Value</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr id="add-row">
+        <td><input id="new-key"   type="text" placeholder="key" autocomplete="off" spellcheck="false"></td>
+        <td><input id="new-value" type="text" placeholder="value" autocomplete="off" spellcheck="false"></td>
+        <td><button class="btn-add" onclick="addEntry()">Add</button></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<div id="count"></div>
+
+<script>
+  // ── State ───────────────────────────────────────────────────────────────────
+  const store = new Map(); // key → value
+  let ws = null;
+
+  // ── DOM helpers ─────────────────────────────────────────────────────────────
+  const tbody       = document.querySelector('#kv-table tbody');
+  const addRow      = document.getElementById('add-row');
+  const newKeyEl    = document.getElementById('new-key');
+  const newValueEl  = document.getElementById('new-value');
+  const statusEl    = document.getElementById('status');
+  const instanceEl  = document.getElementById('instance-id');
+  const countEl     = document.getElementById('count');
+
+  function setStatus(state) {
+    statusEl.className = state;
+    statusEl.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+  }
+
+  function updateCount() {
+    countEl.textContent = `${store.size} key${store.size !== 1 ? 's' : ''}`;
+  }
+
+  // ── Row management ──────────────────────────────────────────────────────────
+  function rowId(key) { return 'row-' + btoa(key).replace(/[^a-z0-9]/gi, '_'); }
+
+  function upsertRow(key, value) {
+    const id  = rowId(key);
+    let row   = document.getElementById(id);
+    store.set(key, value);
+
+    if (row) {
+      const inp = row.querySelector('input');
+      if (document.activeElement !== inp) inp.value = value;
+      updateCount();
+      return;
+    }
+
+    row = document.createElement('tr');
+    row.id = id;
+    row.dataset.key = key;
+
+    const keyTd = document.createElement('td');
+    keyTd.className = 'key-cell';
+    keyTd.textContent = key;
+
+    const valTd = document.createElement('td');
+    const inp   = document.createElement('input');
+    inp.type  = 'text';
+    inp.value = value;
+    inp.spellcheck = false;
+    inp.autocomplete = 'off';
+
+    let lastSent = value;
+
+    function save() {
+      const v = inp.value;
+      if (v === lastSent) return;
+      lastSent = v;
+      send({ type: 'set', key, value: v });
+      inp.classList.add('flash-saved');
+      setTimeout(() => inp.classList.remove('flash-saved'), 600);
+    }
+
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); inp.blur(); } });
+    inp.addEventListener('blur', save);
+    valTd.appendChild(inp);
+
+    const actTd = document.createElement('td');
+    const btn   = document.createElement('button');
+    btn.className   = 'btn-delete';
+    btn.textContent = 'Delete';
+    btn.onclick = () => send({ type: 'delete', key });
+    actTd.appendChild(btn);
+
+    row.appendChild(keyTd);
+    row.appendChild(valTd);
+    row.appendChild(actTd);
+
+    // Insert in alphabetical order after addRow
+    let inserted = false;
+    const rows = Array.from(tbody.querySelectorAll('tr[data-key]'));
+    for (const r of rows) {
+      if (r.dataset.key > key) {
+        tbody.insertBefore(row, r);
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) tbody.appendChild(row);
+    updateCount();
+  }
+
+  function removeRow(key) {
+    store.delete(key);
+    const row = document.getElementById(rowId(key));
+    if (row) row.remove();
+    updateCount();
+  }
+
+  // ── WebSocket ───────────────────────────────────────────────────────────────
+  function send(msg) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg));
+    }
+  }
+
+  function handleMessage(msg) {
+    if (msg.type === 'init') {
+      instanceEl.textContent = msg.instanceId || '—';
+      // Clear existing data rows
+      Array.from(tbody.querySelectorAll('tr[data-key]')).forEach(r => r.remove());
+      store.clear();
+      (msg.entries || []).forEach(({ key, value }) => upsertRow(key, value));
+    } else if (msg.type === 'set') {
+      upsertRow(msg.key, msg.value);
+    } else if (msg.type === 'delete') {
+      removeRow(msg.key);
+    }
+  }
+
+  function connect() {
+    setStatus('connecting');
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}`);
+
+    ws.onopen  = () => setStatus('connected');
+    ws.onclose = () => {
+      setStatus('disconnected');
+      setTimeout(connect, 2500);
+    };
+    ws.onerror = () => {};
+    ws.onmessage = (e) => {
+      try { handleMessage(JSON.parse(e.data)); } catch {}
+    };
+  }
+
+  // ── Add entry ───────────────────────────────────────────────────────────────
+  function addEntry() {
+    const key   = newKeyEl.value.trim();
+    const value = newValueEl.value;
+    if (!key) { newKeyEl.focus(); return; }
+    send({ type: 'set', key, value });
+    newKeyEl.value  = '';
+    newValueEl.value = '';
+    newKeyEl.focus();
+  }
+
+  newKeyEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); newValueEl.focus(); }
+  });
+  newValueEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addEntry(); }
+  });
+
+  // ── Start ───────────────────────────────────────────────────────────────────
+  connect();
+</script>
+</body>
+</html>
