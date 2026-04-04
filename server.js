@@ -138,10 +138,6 @@ async function rCacheDel(key) {
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/health', (_req, res) =>
-  res.json({ ok: true, instance: INSTANCE_ID, cluster: CLUSTER_NAME })
-);
-
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
 const server = http.createServer(app);
